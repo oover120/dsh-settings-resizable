@@ -1,0 +1,9 @@
+{
+  "meta": {
+    "title": "Resizable Settings",
+    "description": "Makes the Settings dialog resizable by dragging its edges and corners, and remembers the size between sessions."
+  },
+  "resizeHandle": "Resize settings dialog",
+  "resizeHandleHorizontal": "Resize settings dialog width",
+  "resizeHandleVertical": "Resize settings dialog height"
+}

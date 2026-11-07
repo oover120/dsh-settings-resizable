@@ -1,0 +1,44 @@
+{
+  "name": "dsh-settings-resizable",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Makes the Settings dialog resizable with pointer handles and remembers the chosen size.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "web-ui",
+    "settings",
+    "resizable",
+    "ui"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}

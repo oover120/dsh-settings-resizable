@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" fill="none" role="img" aria-label="Resizable settings">
+  <rect x="7.5" y="7.5" width="17" height="17" rx="3.5" stroke="#9aa3b2" stroke-width="1.6" opacity="0.9" />
+  <g stroke="#9aa3b2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M19.5 12.5 25 7" />
+    <path d="M25 7h-4.6" />
+    <path d="M25 7v4.6" />
+    <path d="M12.5 19.5 7 25" />
+    <path d="M7 25h4.6" />
+    <path d="M7 25v-4.6" />
+  </g>
+</svg>

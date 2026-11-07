@@ -1,0 +1,9 @@
+{
+  "meta": {
+    "title": "可调整大小的设置窗口",
+    "description": "拖动窗口边缘和四角即可调整设置窗口的大小，并在会话之间记住所选尺寸。"
+  },
+  "resizeHandle": "调整设置窗口大小",
+  "resizeHandleHorizontal": "调整设置窗口宽度",
+  "resizeHandleVertical": "调整设置窗口高度"
+}
