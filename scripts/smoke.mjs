@@ -77,6 +77,82 @@ const clientMarkers = [
 ];
 for (const [name, passed] of clientMarkers) check('client.js: ' + name, passed);
 
+// Navigation splitter: constants, selectors, ARIA and the injected grid rule.
+const navigatorMarkers = [
+  ['navigation width variable', client.includes('--dsh-sr-nav-width')],
+  ['splitter class', /'dsh-sr-handle dsh-sr-split'/.test(client)],
+  ['splitter attribute', client.includes("'data-dsh-settings-resizable-split'")],
+  ['splitter role separator', /setAttribute\('role',\s*'separator'\)/.test(client)],
+  ['splitter vertical orientation', /setAttribute\('aria-orientation',\s*'vertical'\)/.test(client)],
+  ['splitter column resize cursor', /cursor:\s*col-resize/.test(client)],
+  ['splitter grid rule', /grid-template-columns:\s*var\(--dsh-sr-nav-width,\s*188px\)\s*minmax\(0,\s*1fr\)/.test(client)],
+  ['splitter desktop-only media query', /@media\s*\(width > 767px\)/.test(client)],
+  ['navigation default width 188', /NAV_DEFAULT_WIDTH\s*=\s*188/.test(client)],
+  ['navigation minimum width 140', /NAV_MIN_WIDTH\s*=\s*140/.test(client)],
+  ['navigation maximum width 480', /NAV_MAX_WIDTH\s*=\s*480/.test(client)],
+  ['options column minimum 320', /NAV_OPTIONS_MIN_WIDTH\s*=\s*320/.test(client)],
+  ['splitter drag applies delta 1:1', /startWidth\s*\+\s*\(moveEvent\.clientX - startX\)/.test(client)],
+  ['splitter keyboard arrow step', /ArrowRight'\)\s*step\s*=\s*KEYBOARD_STEP/.test(client)],
+  ['splitter removed on dispose', /function removeSplitter\(/.test(client)],
+];
+for (const [name, passed] of navigatorMarkers) check('client.js: ' + name, passed);
+
+// Storage schema: one key, three fields, and a default for records written
+// before the navigation width existed.
+check('client.js: storage schema keeps width, height and navWidth', /width:\s*Math\.round\(width\)[\s\S]{0,120}navWidth:\s*Math\.round\(/.test(client));
+check('client.js: legacy records default the navigation width', /Number\.isFinite\(savedNav\)[\s\S]{0,120}NAV_DEFAULT_WIDTH/.test(client));
+
+// Inline navigation column. The injected rule lost to the shell's own
+// `.panel { grid-template: ... }`: both selectors weigh (0,1,0), but the shell
+// chunk is appended to <head> after ours, so the column stayed at 188px even
+// though --dsh-sr-nav-width changed. The width is now written inline on the
+// dialog (inline wins without an importance override), and every handoff has to
+// drop that inline template so the fullscreen layout keeps its single column.
+const inlineColumnMarkers = [
+  [
+    'navigation width applied inline on the panel before positioning',
+    /function applyNavWidth\([\s\S]{0,900}panel\.style\.gridTemplateColumns\s*=\s*navWidth \+ 'px minmax\(0, 1fr\)'[\s\S]{0,200}positionSplitter\(\)/.test(client),
+  ],
+  [
+    'inline grid columns cleared in removeSplitter and detach',
+    /function removeSplitter\(\)[\s\S]{0,900}removeProperty\('grid-template-columns'\)/.test(client)
+      && /function detach\(\)[\s\S]{0,900}removeProperty\('grid-template-columns'\)/.test(client),
+  ],
+  [
+    'mobile scan branch clears the inline grid columns',
+    /function scan\(\)[\s\S]{0,1200}if \(isMobile\(\)\) \{[\s\S]{0,700}removeProperty\('grid-template-columns'\)/.test(client),
+  ],
+  ['injected css carries no importance override', !/!\s*important/.test(client)],
+];
+for (const [name, passed] of inlineColumnMarkers) check('client.js: ' + name, passed);
+
+// Regression guards for the 0.2.0 hang: overlayHeight() appended its probe to
+// the dialog, that mutation matched shouldScan(), and the next scan measured
+// again — an endless microtask loop that pegged the renderer at 100% CPU.
+// The probe must live in <body>, the filter must ignore injected nodes, and one
+// pass must measure once.
+const loopMarkers = [
+  [
+    'overlay probe is mounted in <body>',
+    /function overlayHeight\(\)[\s\S]{0,900}doc\.body\.appendChild\(probe\)/.test(client),
+  ],
+  ['overlay probe never touches the dialog', !/panel\.appendChild\(probe\)/.test(client)],
+  [
+    'scan filter ignores injected nodes',
+    /const OWN_ATTRS = \[HANDLE_ATTR, SPLIT_ATTR, PROBE_ATTR\]/.test(client)
+      && /function isOwnNode\(node\)[\s\S]{0,500}hasAttribute\(attr\)/.test(client)
+      && /function shouldScan\(records\)[\s\S]{0,900}isOwnNode\(node\)/.test(client),
+  ],
+  [
+    'measurement is re-entrancy guarded per pass',
+    /let measuring = false/.test(client)
+      && /function resetMeasurements\(\)/.test(client)
+      && /function scan\(\)[\s\S]{0,400}resetMeasurements\(\)/.test(client)
+      && /function onResize\(\)[\s\S]{0,400}resetMeasurements\(\)/.test(client),
+  ],
+];
+for (const [name, passed] of loopMarkers) check('client.js: ' + name, passed);
+
 check('client.js: host half does not import DOM globals', !/document\.body\.appendChild/.test(client));
 check('index.js: exports apply', /export\s+function\s+apply\s*\(/.test(host));
 check('cordis.patch.yml: inserts the plugin', /id:\s*settings-resizable/.test(patch) && /name:\s*dsh-settings-resizable/.test(patch));
@@ -148,7 +224,7 @@ for (const locale of ['en', 'ru', 'zh']) {
   }
   check(relative + ': meta.title', typeof data.meta?.title === 'string' && data.meta.title.length > 0);
   check(relative + ': meta.description', typeof data.meta?.description === 'string' && data.meta.description.length > 0);
-  for (const key of ['resizeHandle', 'resizeHandleHorizontal', 'resizeHandleVertical']) {
+  for (const key of ['resizeHandle', 'resizeHandleHorizontal', 'resizeHandleVertical', 'resizeNavigation']) {
     check(relative + ': ' + key, typeof data[key] === 'string' && data[key].length > 0);
   }
   if (locale === 'ru') {

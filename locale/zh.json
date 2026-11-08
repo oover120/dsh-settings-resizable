@@ -5,5 +5,6 @@
   },
   "resizeHandle": "调整设置窗口大小",
   "resizeHandleHorizontal": "调整设置窗口宽度",
-  "resizeHandleVertical": "调整设置窗口高度"
+  "resizeHandleVertical": "调整设置窗口高度",
+  "resizeNavigation": "调整导航栏宽度"
 }

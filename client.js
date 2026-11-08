@@ -30,6 +30,32 @@ window.__ModuleLoader__.load({
     const DRAG_SCALE = 2;
     const DIRECTIONS = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 
+    // Navigation column. The shell declares 188px in its own grid template, so
+    // the same value is the default here. The options column keeps at least
+    // NAV_OPTIONS_MIN_WIDTH, which caps the navigation width from above on a
+    // narrow dialog.
+    const NAV_DEFAULT_WIDTH = 188;
+    const NAV_MIN_WIDTH = 140;
+    const NAV_MAX_WIDTH = 480;
+    const NAV_OPTIONS_MIN_WIDTH = 320;
+    /**
+     * Diagnostic hook: mirrors the applied column width for inspection. The
+     * visible result comes from the inline `grid-template-columns` instead, so
+     * a stale value here can never pin the column.
+     */
+    const NAV_VAR = '--dsh-sr-nav-width';
+    const SPLIT_ATTR = 'data-dsh-settings-resizable-split';
+    /**
+     * Marker on the throwaway element that carries the shell's overlay height
+     * expression. It is mounted in <body>, never in the dialog, so measuring the
+     * frame cannot mutate the observed panel.
+     */
+    const PROBE_ATTR = 'data-dsh-settings-resizable-probe';
+    /** Marker attributes of every node this plugin injects into the page. */
+    const OWN_ATTRS = [HANDLE_ATTR, SPLIT_ATTR, PROBE_ATTR];
+    /** Tolerance when matching a grid child against the panel's left and bottom edges. */
+    const NAV_CELL_TOLERANCE = 2;
+
     /** Corner positions appended to the shared label of the diagonal handles. */
     const CORNER_NAMES = {
       ne: 'top-right',
@@ -48,16 +74,19 @@ window.__ModuleLoader__.load({
         resizeHandle: 'Resize settings dialog',
         resizeHandleHorizontal: 'Resize settings dialog width',
         resizeHandleVertical: 'Resize settings dialog height',
+        resizeNavigation: 'Resize navigation column',
       },
       ru: {
         resizeHandle: 'Изменить размер окна настроек',
         resizeHandleHorizontal: 'Изменить ширину окна настроек',
         resizeHandleVertical: 'Изменить высоту окна настроек',
+        resizeNavigation: 'Изменить ширину колонки навигации',
       },
       zh: {
         resizeHandle: '调整设置窗口大小',
         resizeHandleHorizontal: '调整设置窗口宽度',
         resizeHandleVertical: '调整设置窗口高度',
+        resizeNavigation: '调整导航栏宽度',
       },
     };
 
@@ -213,6 +242,41 @@ window.__ModuleLoader__.load({
 .dsh-sr-se:focus-visible::after {
   opacity: 0.9;
 }
+/*
+ * Navigation splitter. It reuses the base handle rules above (absolute
+ * positioning, focus ring, grip fade) and only adds its own geometry and
+ * cursor. top/height and left are written as inline styles from the measured
+ * navigation cell, so the strip always sits on the real column boundary.
+ */
+.dsh-sr-split {
+  left: 0;
+  width: 6px;
+  cursor: col-resize;
+  transform: translateX(-3px);
+  z-index: 4;
+}
+.dsh-sr-split::after {
+  top: 12px;
+  bottom: 12px;
+  left: 2px;
+  width: 2px;
+  height: auto;
+  transform: none;
+  border-radius: 1px;
+}
+/*
+ * Fallback only. This rule has the same specificity (0,1,0) as the shell's own
+ * column declaration, and the shell's chunk lands in <head> after ours, so
+ * document order normally makes the shell win. The column is therefore
+ * resized by an inline grid-template-columns on the dialog; this rule is kept
+ * because it costs nothing and keeps the custom property meaningful, and it is
+ * still correct wherever no later stylesheet shadows it. No importance override.
+ */
+@media (width > 767px) {
+  [data-shortcut-modal="settings"] {
+    grid-template-columns: var(--dsh-sr-nav-width, 188px) minmax(0, 1fr);
+  }
+}
 `;
 
     /**
@@ -232,7 +296,7 @@ window.__ModuleLoader__.load({
     /**
      * Resolve fallback labels from the document language without depending on
      * the locale service.
-     * @returns {{ resizeHandle: string, resizeHandleHorizontal: string, resizeHandleVertical: string }} labels.
+     * @returns {{ resizeHandle: string, resizeHandleHorizontal: string, resizeHandleVertical: string, resizeNavigation: string }} labels.
      */
     function fallbackLabels() {
       const language = String(
@@ -270,11 +334,19 @@ window.__ModuleLoader__.load({
       let warned = false;
       let drag = null;
       let current = null;
+      let splitter = null;
+      let navWidth = 0;
       let stored = readStored();
+      // One measurement per pass. Both flags exist to break the 0.2.0 loop where
+      // measuring the overlay mutated the dialog and every mutation started a
+      // new scan.
+      let measuring = false;
+      let overlayCache = 0;
+      let measureCache = null;
 
       /**
        * Read and validate the persisted size.
-       * @returns {{ width: number, height: number } | null} saved size or null.
+       * @returns {{ width: number, height: number, navWidth: number } | null} saved size or null.
        */
       function readStored() {
         try {
@@ -285,19 +357,31 @@ window.__ModuleLoader__.load({
           const width = Number(parsed.width);
           const height = Number(parsed.height);
           if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
-          return { width, height };
+          const savedNav = Number(parsed.navWidth);
+          return {
+            width,
+            height,
+            // Records written before 0.2.0 carry no navigation width.
+            navWidth: Number.isFinite(savedNav) && savedNav > 0 ? savedNav : NAV_DEFAULT_WIDTH,
+          };
         } catch {
           return null;
         }
       }
 
       /**
-       * Persist a size under the single storage key.
+       * Persist a size under the single storage key. The navigation width is
+       * read from the controller state, so every existing call site keeps
+       * writing the same schema without passing a third argument.
        * @param {number} width - dialog width in CSS pixels.
        * @param {number} height - dialog height in CSS pixels.
        */
       function writeStored(width, height) {
-        const value = { width: Math.round(width), height: Math.round(height) };
+        const value = {
+          width: Math.round(width),
+          height: Math.round(height),
+          navWidth: Math.round(navWidth > 0 ? navWidth : NAV_DEFAULT_WIDTH),
+        };
         stored = value;
         try {
           win.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
@@ -353,12 +437,39 @@ window.__ModuleLoader__.load({
         return corner ? base + ' from the ' + corner + ' corner' : base;
       }
 
+      /**
+       * Resolve the accessible name for the navigation splitter.
+       * @returns {string} localized label with a built-in fallback.
+       */
+      function splitLabel() {
+        return translateLabel('resizeNavigation') || fallbackLabels().resizeNavigation;
+      }
+
+      /**
+       * Report whether another stylesheet follows ours in the document. The
+       * injected grid rule and the shell's column rule have the same
+       * specificity, so document order decides which one wins.
+       * @param {Element} element - this plugin's style element.
+       * @returns {boolean} true when a stylesheet comes after ours.
+       */
+      function hasLaterStylesheet(element) {
+        let node = element.nextElementSibling;
+        while (node) {
+          if (node.tagName === 'STYLE') return true;
+          node = node.nextElementSibling;
+        }
+        return false;
+      }
+
       /** Install the stylesheet once and remember whether this instance owns it. */
       function ensureStyles() {
         const existing = doc.getElementById(STYLE_ID);
         if (existing) {
           if (existing !== styleElement) ownsStyle = false;
           styleElement = existing;
+          // Keep our sheet last so the grid rule is not shadowed by a stylesheet
+          // chunk the shell appended after this plugin started.
+          if (hasLaterStylesheet(existing)) (doc.head || doc.documentElement).appendChild(existing);
           return;
         }
         styleElement = doc.createElement('style');
@@ -400,23 +511,46 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * Drop the measured bounds so the next pass reads the viewport again.
+       * Measuring touches layout, so a pass measures once and every caller in
+       * that pass reuses the result.
+       */
+      function resetMeasurements() {
+        measuring = false;
+        overlayCache = 0;
+        measureCache = null;
+      }
+
+      /**
        * Measure the vertical frame chrome in layout. The overlay offset is a
        * calc() expression in the Electron titlebar window and on macOS, so its
        * computed string is not a plain number and must not be parsed. A zero
        * width probe carries the shell's own height expression; its used height
        * is the total top and bottom inset.
+       *
+       * The probe is mounted in <body> with a marker attribute, never in the
+       * dialog: a node added to the panel is reported by this controller's own
+       * observer, which used to schedule the next scan from inside a scan.
        * @returns {number} total overlay height in CSS pixels.
        */
       function overlayHeight() {
+        if (overlayCache > 0) return overlayCache;
+        // A nested measure keeps the previous number instead of mounting a
+        // second probe; there is no last value only on the very first call.
+        if (measuring || !doc.body) return 2 * DEFAULT_OVERLAY_TOP;
+        measuring = true;
         const probe = doc.createElement('div');
         probe.setAttribute('aria-hidden', 'true');
+        probe.setAttribute(PROBE_ATTR, '');
         probe.style.cssText = 'position:absolute;width:0;height:calc(2 * max(24px, var(--dsh-frame-overlay-top, 24px)));visibility:hidden;pointer-events:none;inset:0 auto auto 0';
-        panel.appendChild(probe);
+        doc.body.appendChild(probe);
         try {
           const height = probe.getBoundingClientRect().height;
-          return Number.isFinite(height) && height > 0 ? height : 2 * DEFAULT_OVERLAY_TOP;
+          overlayCache = Number.isFinite(height) && height > 0 ? height : 2 * DEFAULT_OVERLAY_TOP;
+          return overlayCache;
         } finally {
           probe.remove();
+          measuring = false;
         }
       }
 
@@ -428,6 +562,7 @@ window.__ModuleLoader__.load({
        * @returns {{ maxWidth: number, maxHeight: number }} available bounds.
        */
       function measureLimits() {
+        if (measureCache) return measureCache;
         const styles = win.getComputedStyle(panel);
         const viewportWidth = win.innerWidth;
         const viewportHeight = win.innerHeight;
@@ -445,37 +580,209 @@ window.__ModuleLoader__.load({
         if (!Number.isFinite(maxHeight) || maxHeight <= 0) {
           maxHeight = viewportHeight - overlayHeight();
         }
-        return {
+        measureCache = {
           maxWidth: Math.max(0, maxWidth),
           maxHeight: Math.max(0, maxHeight),
+        };
+        return measureCache;
+      }
+
+      /**
+       * Read the panel's own border and padding insets. The grid cells live
+       * inside the padding box, so edge matching and absolute offsets both need
+       * these numbers; a panel without padding simply yields zeros.
+       * @returns {{ left: number, top: number, bottom: number }} insets in CSS pixels.
+       */
+      function panelInsets() {
+        const styles = win.getComputedStyle(panel);
+        const read = (value) => {
+          const parsed = parseFloat(value);
+          return Number.isFinite(parsed) ? parsed : 0;
+        };
+        return {
+          left: read(styles.borderLeftWidth) + read(styles.paddingLeft),
+          top: read(styles.borderTopWidth) + read(styles.paddingTop),
+          bottom: read(styles.borderBottomWidth) + read(styles.paddingBottom),
         };
       }
 
       /**
+       * Find the navigation cell inside the dialog's own grid. The shell renders
+       * four direct children in source order (title, navigation, header,
+       * options), so the navigation cell is the only one that starts at the
+       * panel's left padding edge and reaches its bottom edge. Injected nodes are
+       * skipped first, because the south-west handle matches the same two edges.
+       * @returns {Element | null} the navigation cell, or null when the layout
+       *   does not look like the docked two-column grid.
+       */
+      function navCell() {
+        if (!panel) return null;
+        const panelRect = panel.getBoundingClientRect();
+        const insets = panelInsets();
+        const leftEdge = panelRect.left + insets.left;
+        const bottomEdge = panelRect.bottom - insets.bottom;
+        for (const child of Array.from(panel.children)) {
+          if (child.hasAttribute(HANDLE_ATTR) || child.hasAttribute(SPLIT_ATTR)) continue;
+          const rect = child.getBoundingClientRect();
+          if (!(rect.width > 0) || !(rect.height > 0)) continue;
+          if (Math.abs(rect.left - leftEdge) <= NAV_CELL_TOLERANCE
+            && Math.abs(rect.bottom - bottomEdge) <= NAV_CELL_TOLERANCE) {
+            return child;
+          }
+        }
+        return null;
+      }
+
+      /**
+       * Resolve the splitter's position. The navigation cell's rectangle carries
+       * the real column boundary (including the panel's padding); offsets are
+       * taken relative to the panel's padding box, which is the containing block
+       * of an absolutely positioned child.
+       * @returns {{ left: number, top: number, height: number } | null} geometry in CSS pixels.
+       */
+      function splitGeometry() {
+        if (!panel) return null;
+        const panelRect = panel.getBoundingClientRect();
+        if (!(panelRect.width > 0) || !(panelRect.height > 0)) return null;
+        const styles = win.getComputedStyle(panel);
+        const borderLeft = parseFloat(styles.borderLeftWidth);
+        const borderTop = parseFloat(styles.borderTopWidth);
+        const originX = panelRect.left + (Number.isFinite(borderLeft) ? borderLeft : 0);
+        const originY = panelRect.top + (Number.isFinite(borderTop) ? borderTop : 0);
+        const cell = navCell();
+        if (cell) {
+          const rect = cell.getBoundingClientRect();
+          return {
+            left: rect.right - originX,
+            top: rect.top - originY,
+            height: rect.height,
+          };
+        }
+        // Fallback: the grid cannot be identified, so fall back to the applied
+        // column width and the panel's full height instead of dropping the
+        // control. The next scan re-measures as soon as the cell is back.
+        if (!(navWidth > 0)) return null;
+        const insets = panelInsets();
+        return {
+          left: insets.left + navWidth,
+          top: insets.top,
+          height: Math.max(0, panelRect.height - insets.top - insets.bottom),
+        };
+      }
+
+      /**
+       * Derive the navigation width bounds. The fixed range is additionally
+       * capped so the options column keeps at least NAV_OPTIONS_MIN_WIDTH.
+       * @param {{ maxWidth: number, maxHeight: number }} [limits] - bounds.
+       * @returns {{ min: number, max: number }} inclusive range.
+       */
+      function navBounds(limits) {
+        const min = NAV_MIN_WIDTH;
+        if (!panel) return { min, max: min };
+        const bounds = limits || measureLimits();
+        const size = current || currentSize();
+        const panelWidth = Math.min(size.width, bounds.maxWidth);
+        const max = Math.min(NAV_MAX_WIDTH, Math.max(min, Math.floor(panelWidth - NAV_OPTIONS_MIN_WIDTH)));
+        return { min, max };
+      }
+
+      /** Place the splitter on the measured column boundary. */
+      function positionSplitter() {
+        if (!splitter || !panel || !splitter.isConnected) return;
+        const geometry = splitGeometry();
+        if (!geometry) return;
+        splitter.style.left = Math.round(geometry.left) + 'px';
+        splitter.style.top = Math.round(geometry.top) + 'px';
+        splitter.style.height = Math.round(geometry.height) + 'px';
+      }
+
+      /**
+       * Mirror the navigation width and its bounds into the splitter's ARIA
+       * value triple.
+       * @param {{ maxWidth: number, maxHeight: number }} [limits] - bounds.
+       */
+      function refreshSplitAria(limits) {
+        if (!splitter || !splitter.isConnected) return;
+        const room = navBounds(limits);
+        splitter.setAttribute('aria-valuemin', String(room.min));
+        splitter.setAttribute('aria-valuemax', String(room.max));
+        splitter.setAttribute('aria-valuenow', String(Math.round(navWidth > 0 ? navWidth : NAV_DEFAULT_WIDTH)));
+      }
+
+      /**
+       * Clamp and apply the navigation column width.
+       *
+       * The width is written INLINE on the dialog. The injected rule below has
+       * the same specificity as the shell's `.panel { grid-template: ... }`, and
+       * the shell's chunk is inserted into <head> after ours, so document order
+       * makes the shell win and the column never moves. An inline declaration
+       * outranks both, needs no importance override, and is what actually
+       * resizes the column; the custom property stays as a diagnostic hook.
+       * @param {number} width - desired width in CSS pixels.
+       * @param {'silent' | 'soon' | 'now'} [mode] - persistence mode.
+       * @param {{ maxWidth: number, maxHeight: number }} [limits] - bounds.
+       */
+      function applyNavWidth(width, mode, limits) {
+        if (!panel || !panel.isConnected || isMobile()) return;
+        const bounds = limits || measureLimits();
+        const room = navBounds(bounds);
+        navWidth = Math.round(clamp(width, room.min, room.max));
+        panel.style.setProperty(NAV_VAR, navWidth + 'px');
+        panel.style.gridTemplateColumns = navWidth + 'px minmax(0, 1fr)';
+        // Order matters: the splitter's position is measured from the navigation
+        // cell, so the column must already carry its new width here.
+        positionSplitter();
+        refreshSplitAria(bounds);
+        if (mode !== 'now' && mode !== 'soon') return;
+        const size = current || currentSize();
+        if (mode === 'now') writeStored(size.width, size.height);
+        else scheduleSave(size.width, size.height);
+      }
+
+      /**
+       * Re-clamp the navigation width against the current panel size. Called
+       * whenever the dialog itself changes size, because a narrower dialog must
+       * leave the options column its minimum.
+       * @param {{ maxWidth: number, maxHeight: number }} [limits] - bounds.
+       */
+      function syncNavWidth(limits) {
+        if (!panel || isMobile() || !splitter) return;
+        applyNavWidth(
+          navWidth > 0 ? navWidth : (stored ? stored.navWidth : NAV_DEFAULT_WIDTH),
+          'silent',
+          limits,
+        );
+      }
+
+      /**
        * Mirror the current size and bounds into the ARIA value triple of the
-       * edge handles. Corners are separators without a value.
+       * edge handles. Corners are separators without a value. The navigation
+       * splitter is refreshed from its own range.
        * @param {{ maxWidth: number, maxHeight: number }} [limits] - already
        *   measured bounds; measured on demand when omitted.
        */
       function refreshAria(limits) {
-        if (!panel || handles.size === 0) return;
+        if (!panel) return;
         const bounds = limits || measureLimits();
-        const size = current || currentSize();
-        const maxWidth = String(Math.round(bounds.maxWidth));
-        const maxHeight = String(Math.round(bounds.maxHeight));
-        const nowWidth = String(Math.round(size.width));
-        const nowHeight = String(Math.round(size.height));
-        for (const [direction, handle] of handles) {
-          if (direction === 'e' || direction === 'w') {
-            handle.setAttribute('aria-valuemin', String(MIN_WIDTH));
-            handle.setAttribute('aria-valuemax', maxWidth);
-            handle.setAttribute('aria-valuenow', nowWidth);
-          } else if (direction === 'n' || direction === 's') {
-            handle.setAttribute('aria-valuemin', String(MIN_HEIGHT));
-            handle.setAttribute('aria-valuemax', maxHeight);
-            handle.setAttribute('aria-valuenow', nowHeight);
+        if (handles.size > 0) {
+          const size = current || currentSize();
+          const maxWidth = String(Math.round(bounds.maxWidth));
+          const maxHeight = String(Math.round(bounds.maxHeight));
+          const nowWidth = String(Math.round(size.width));
+          const nowHeight = String(Math.round(size.height));
+          for (const [direction, handle] of handles) {
+            if (direction === 'e' || direction === 'w') {
+              handle.setAttribute('aria-valuemin', String(MIN_WIDTH));
+              handle.setAttribute('aria-valuemax', maxWidth);
+              handle.setAttribute('aria-valuenow', nowWidth);
+            } else if (direction === 'n' || direction === 's') {
+              handle.setAttribute('aria-valuemin', String(MIN_HEIGHT));
+              handle.setAttribute('aria-valuemax', maxHeight);
+              handle.setAttribute('aria-valuenow', nowHeight);
+            }
           }
         }
+        refreshSplitAria(bounds);
       }
 
       /**
@@ -495,6 +802,9 @@ window.__ModuleLoader__.load({
         current = { width: nextWidth, height: nextHeight };
         panel.style.width = nextWidth + 'px';
         panel.style.height = nextHeight + 'px';
+        // The dialog just changed width, so the navigation column has to be
+        // re-clamped before the new size is persisted.
+        syncNavWidth(bounds);
         refreshAria(bounds);
         if (mode === 'now') writeStored(nextWidth, nextHeight);
         else if (mode === 'soon') scheduleSave(nextWidth, nextHeight);
@@ -609,6 +919,70 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * Create the navigation splitter unless it is already attached. It is a
+       * separator with a value, so it mirrors the edge handles in semantics and
+       * keyboard behaviour, and it is always a tab stop.
+       */
+      function addSplitter() {
+        if (!panel || isMobile()) return;
+        removeSplitter();
+        const element = doc.createElement('div');
+        element.className = 'dsh-sr-handle dsh-sr-split';
+        element.setAttribute(SPLIT_ATTR, '');
+        element.setAttribute('role', 'separator');
+        element.setAttribute('aria-orientation', 'vertical');
+        element.setAttribute('aria-label', splitLabel());
+        element.setAttribute('tabindex', '0');
+        element.addEventListener('pointerdown', onSplitPointerDown);
+        element.addEventListener('keydown', onSplitKeyDown);
+        panel.appendChild(element);
+        splitter = element;
+        applyNavWidth(
+          navWidth > 0 ? navWidth : (stored ? stored.navWidth : NAV_DEFAULT_WIDTH),
+          'silent',
+        );
+      }
+
+      /**
+       * Verify that the splitter is still attached and labelled, then re-place it.
+       * @param {{ maxWidth: number, maxHeight: number }} [limits] - bounds
+       *   measured by the caller, so the refresh does not measure again.
+       * @returns {boolean} true when the splitter is intact.
+       */
+      function splitterReady(limits) {
+        if (!splitter || !splitter.isConnected || splitter.parentNode !== panel) return false;
+        const label = splitLabel();
+        if (splitter.getAttribute('aria-label') !== label) splitter.setAttribute('aria-label', label);
+        positionSplitter();
+        refreshSplitAria(limits);
+        return true;
+      }
+
+      /**
+       * Remove the splitter and drop the inline navigation width. The inline
+       * `grid-template-columns` must go with it, otherwise a stale column would
+       * outlive the control that can change it — and would outrank the shell's
+       * own template in the mobile layout.
+       */
+      function removeSplitter() {
+        if (splitter) {
+          splitter.removeEventListener('pointerdown', onSplitPointerDown);
+          splitter.removeEventListener('keydown', onSplitKeyDown);
+          splitter.remove();
+          splitter = null;
+        }
+        if (!panel) return;
+        for (const orphan of Array.from(panel.querySelectorAll('[' + SPLIT_ATTR + ']'))) {
+          orphan.remove();
+        }
+        navWidth = 0;
+        // Leave no stale inline column behind: the shell sets `1fr` in the
+        // fullscreen layout and an inline declaration would override it.
+        panel.style.removeProperty('grid-template-columns');
+        panel.style.removeProperty(NAV_VAR);
+      }
+
+      /**
        * Start a drag from one handle. Pointer capture is best effort: synthetic
        * input may not allocate a capture target, so window-level listeners are
        * the reliable path and capture only improves tracking outside the window.
@@ -713,13 +1087,91 @@ window.__ModuleLoader__.load({
         setSize(base.width + deltaWidth, base.height + deltaHeight, 'now');
       }
 
+      /**
+       * Start a drag from the navigation splitter. The dialog's left edge stays
+       * where it is, so the pointer delta maps 1:1 onto the column width and
+       * DRAG_SCALE is intentionally not applied here.
+       * @param {PointerEvent} event - pointerdown event from the splitter.
+       */
+      function onSplitPointerDown(event) {
+        if (!panel || isMobile()) return;
+        if (event.button !== 0) return;
+        if (!event.currentTarget.hasAttribute(SPLIT_ATTR)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        cancelDrag();
+        const target = event.currentTarget;
+        const pointerId = event.pointerId;
+        const startX = event.clientX;
+        const startWidth = navWidth > 0 ? navWidth : (stored ? stored.navWidth : NAV_DEFAULT_WIDTH);
+        const limits = measureLimits();
+        const controller = new AbortController();
+        const finish = (finishEvent) => {
+          if (finishEvent && finishEvent.pointerId !== pointerId) return;
+          controller.abort();
+          if (drag && drag.target === target && drag.pointerId === pointerId) drag = null;
+          try {
+            target.releasePointerCapture(pointerId);
+          } catch {
+            // Capture was never established.
+          }
+          target.removeAttribute(ACTIVE_ATTR);
+          flushSave();
+        };
+        const move = (moveEvent) => {
+          // The same guard as the edge handles: a move without the primary button
+          // means the release happened outside the window.
+          if ((moveEvent.buttons & 1) === 0) {
+            finish(moveEvent);
+            return;
+          }
+          if (moveEvent.pointerId !== pointerId) return;
+          if (moveEvent.cancelable) moveEvent.preventDefault();
+          applyNavWidth(startWidth + (moveEvent.clientX - startX), 'soon', limits);
+        };
+        win.addEventListener('pointermove', move, { capture: true, signal: controller.signal });
+        win.addEventListener('pointerup', finish, { capture: true, signal: controller.signal });
+        win.addEventListener('pointercancel', finish, { capture: true, signal: controller.signal });
+        try {
+          target.setPointerCapture(pointerId);
+        } catch {
+          // Synthetic events may not own an active pointer; window listeners cover it.
+        }
+        drag = { controller, target, pointerId };
+        target.setAttribute(ACTIVE_ATTR, '');
+      }
+
+      /**
+       * Keyboard resizing of the navigation column in 16px steps; the value is
+       * persisted immediately, like the edge handles do.
+       * @param {KeyboardEvent} event - keydown event from the splitter.
+       */
+      function onSplitKeyDown(event) {
+        if (!panel || isMobile()) return;
+        if (!event.currentTarget.hasAttribute(SPLIT_ATTR)) return;
+        let step = 0;
+        if (event.key === 'ArrowRight') step = KEYBOARD_STEP;
+        else if (event.key === 'ArrowLeft') step = -KEYBOARD_STEP;
+        else return;
+        event.preventDefault();
+        event.stopPropagation();
+        applyNavWidth((navWidth > 0 ? navWidth : NAV_DEFAULT_WIDTH) + step, 'now');
+      }
+
       /** Remove the decoration from the current dialog and restore its inline styles. */
       function detach() {
         cancelDrag();
         removeHandles();
+        removeSplitter();
         if (panel && originals) {
           panel.style.width = originals.width;
           panel.style.height = originals.height;
+        }
+        if (panel) {
+          // removeSplitter() already dropped it; this keeps the guarantee even
+          // when the splitter was never mounted (mobile attach, failed scan).
+          panel.style.removeProperty('grid-template-columns');
+          panel.style.removeProperty(NAV_VAR);
         }
         panel = null;
         originals = null;
@@ -735,6 +1187,7 @@ window.__ModuleLoader__.load({
         const limits = measureLimits();
         addHandles(limits);
         applyPreferred(limits);
+        addSplitter();
       }
 
       /**
@@ -743,6 +1196,9 @@ window.__ModuleLoader__.load({
        */
       function scan() {
         if (disposed) return;
+        // One measurement per pass: the cache is dropped here and refilled on
+        // first use, so nothing below measures the overlay twice.
+        resetMeasurements();
         // React may drop the injected stylesheet; restore it before labelling.
         if (!doc.getElementById(STYLE_ID)) ensureStyles();
         const found = doc.querySelector(PANEL_SELECTOR);
@@ -761,21 +1217,30 @@ window.__ModuleLoader__.load({
           return;
         }
         if (isMobile()) {
-          if (handles.size > 0) {
+          if (handles.size > 0 || splitter) {
             cancelDrag();
             removeHandles();
+            removeSplitter();
           }
           if (originals) {
             panel.style.width = originals.width;
             panel.style.height = originals.height;
           }
+          // The fullscreen shell lays the dialog out as a single column, so the
+          // inline desktop template must not survive the handoff.
+          panel.style.removeProperty('grid-template-columns');
+          panel.style.removeProperty(NAV_VAR);
           return;
         }
+        // Measure once per pass and hand the bounds down the chain: the splitter
+        // refresh used to trigger its own measurement on every scan.
+        const limits = measureLimits();
         if (!handlesReady()) {
-          const limits = measureLimits();
           addHandles(limits);
           if (panel.style.width === '' || panel.style.height === '') applyPreferred(limits);
         }
+        // The splitter lives next to the handles and is restored the same way.
+        if (!splitterReady(limits)) addSplitter();
       }
 
       /** Schedule one scan for the current mutation batch. */
@@ -791,6 +1256,39 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * Tell whether a node is injected by this controller. Its own additions
+       * and removals never change the dialog layout, so they must not schedule
+       * a scan; that is exactly the loop scan → measure → probe → scan.
+       * @param {Node} node - added or removed node from a mutation record.
+       * @returns {boolean} true for the probe, the handles and the splitter.
+       */
+      function isOwnNode(node) {
+        if (!node || node.nodeType !== 1) return false;
+        // The dialog itself is never one of our nodes, even with handles inside.
+        if (node === panel || node.matches(PANEL_SELECTOR) || (panel && node.contains(panel))) return false;
+        for (const attr of OWN_ATTRS) {
+          if (node.hasAttribute(attr)) return true;
+          if (node.querySelector('[' + attr + ']')) return true;
+        }
+        return false;
+      }
+
+      /**
+       * Tell whether a mutation record only adds nodes injected by this
+       * controller. Removals are never ignored here: a handle removed by the
+       * host has to be restored by the next scan.
+       * @param {MutationRecord} record - one observer record.
+       * @returns {boolean} true when the record adds own nodes and nothing else.
+       */
+      function addsOnlyOwnNodes(record) {
+        if (record.removedNodes.length > 0 || record.addedNodes.length === 0) return false;
+        for (const node of record.addedNodes) {
+          if (!isOwnNode(node)) return false;
+        }
+        return true;
+      }
+
+      /**
        * Filter mutation batches so streaming chat content does not rescan the
        * document on every token.
        * @param {MutationRecord[]} records - records from the observer.
@@ -798,13 +1296,18 @@ window.__ModuleLoader__.load({
        */
       function shouldScan(records) {
         for (const record of records) {
-          if (panel && record.target === panel) return true;
+          if (panel && record.target === panel) {
+            if (addsOnlyOwnNodes(record)) continue;
+            return true;
+          }
           for (const node of record.addedNodes) {
             if (node.nodeType !== 1) continue;
+            if (isOwnNode(node)) continue;
             if (node === panel || node.matches(PANEL_SELECTOR) || node.querySelector(PANEL_SELECTOR)) return true;
             if (panel && node.contains(panel)) return true;
           }
           for (const node of record.removedNodes) {
+            if (isOwnNode(node)) continue;
             if (!panel) continue;
             if (node === panel) return true;
             if (node.nodeType === 1 && node.contains(panel)) return true;
@@ -816,6 +1319,8 @@ window.__ModuleLoader__.load({
       /** React to viewport changes: mobile handoff and re-clamping. */
       function onResize() {
         if (disposed) return;
+        // The viewport moved, so the pass starts from a fresh measurement.
+        resetMeasurements();
         if (!panel) {
           scan();
           return;
@@ -823,15 +1328,22 @@ window.__ModuleLoader__.load({
         if (isMobile()) {
           cancelDrag();
           if (handles.size > 0) removeHandles();
+          if (splitter) removeSplitter();
           if (originals) {
             panel.style.width = originals.width;
             panel.style.height = originals.height;
           }
+          // Same handoff as scan(): the inline desktop template has to go even
+          // when this pass found no splitter to remove.
+          panel.style.removeProperty('grid-template-columns');
+          panel.style.removeProperty(NAV_VAR);
           return;
         }
         const limits = measureLimits();
         if (!handlesReady()) addHandles(limits);
+        if (!splitterReady(limits)) addSplitter();
         if (drag) {
+          syncNavWidth(limits);
           refreshAria(limits);
           return;
         }
@@ -849,13 +1361,19 @@ window.__ModuleLoader__.load({
         }
         win.removeEventListener('resize', onResize);
         cancelDrag();
-        if (panel) detach();
+        if (panel) {
+          // detach() drops it as well; this keeps dispose self-contained.
+          panel.style.removeProperty('grid-template-columns');
+          detach();
+        }
         handles.clear();
-        // Leave the stylesheet alone while another instance still has handles.
+        splitter = null;
+        // Leave the stylesheet alone while another instance still has handles
+        // or a splitter.
         if (ownsStyle
           && styleElement
           && styleElement.parentNode
-          && doc.querySelectorAll('[' + HANDLE_ATTR + ']').length === 0) {
+          && doc.querySelectorAll('[' + HANDLE_ATTR + '], [' + SPLIT_ATTR + ']').length === 0) {
           styleElement.parentNode.removeChild(styleElement);
         }
         styleElement = null;

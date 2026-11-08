@@ -5,6 +5,62 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-08
+
+### Added
+
+- Navigation column resizing: a vertical divider between the navigation column and the options that
+  changes the dialog's first grid column through the `--dsh-sr-nav-width` custom property. The
+  injected rule only sets `grid-template-columns` and is scoped to `@media (width > 767px)`, so the
+  shell keeps owning the rows and the grid areas, and the fullscreen layout is untouched.
+- Pointer dragging of the divider with a 1:1 delta: the dialog's left edge does not move, so
+  `DRAG_SCALE` is deliberately not applied. Release handling, the `event.buttons` guard, best-effort
+  pointer capture, the 150 ms debounced save and the forced flush reuse the edge-handle code paths.
+- Keyboard resizing of the navigation column in 16 px steps. The divider is always a tab stop and is
+  exposed as `role="separator"` with `aria-orientation="vertical"` and a localized `aria-label`.
+- Navigation width bounds: 140–480 px, additionally capped so the options column keeps at least
+  320 px. The width is re-clamped and re-applied whenever the dialog changes size (edge drag,
+  keyboard resize, window resize).
+- `aria-valuemin` / `aria-valuemax` / `aria-valuenow` on the divider, tracking the current
+  navigation width and its bounds.
+- `navWidth` in the persisted record, which is now `{width, height, navWidth}`. Records written by
+  0.1.0 resolve to the 188 px default, so an upgrade keeps the current column width.
+- `resizeNavigation` label in the built-in dictionaries and in `locale/en.json`, `locale/ru.json`,
+  `locale/zh.json`.
+- Splitter constants, selectors, injected rule, ARIA attributes and storage-schema checks in
+  `scripts/smoke.mjs` (104 checks).
+- README sections for the divider (features, usage, internals, files, verified behaviour) and the
+  version bump to 0.2.0.
+- Live verification in a DSH 0.2.2-rc.1 web host at a 1408 × 797 viewport over the Chrome DevTools
+  Protocol: divider drags in both directions, both clamps (140 px / 480 px), the 320 px options
+  floor, 16 px keyboard steps, reopen, and the mobile handoff, all with a clean console. The
+  measured numbers are in the README table.
+
+### Fixed
+
+- Opening the Settings dialog could stall the renderer: the overlay-height probe was appended to the
+  panel, so every measurement mutated the observed dialog and the observer scheduled the next scan
+  from inside a scan. The probe now mounts in `<body>` behind its own
+  `data-dsh-settings-resizable-probe` marker, `isOwnNode()` keeps the plugin's own additions and
+  removals out of the mutation filter, and the overlay height and the dialog limits are cached for
+  one scan pass (`resetMeasurements()`), so a pass measures the overlay once instead of once per
+  consumer.
+- The navigation column now really changes width. The injected rule and the shell's own column rule
+  have equal specificity (0,1,0), and the shell's stylesheet is appended to `head` after ours, so
+  document order kept `grid-template-columns` at `188px 612px` while `--dsh-sr-nav-width` followed
+  the drag. `applyNavWidth()` writes the template inline on the dialog instead, which wins without
+  an importance override, and calls `positionSplitter()` after that write so the divider sits on the
+  real column boundary. The inline template is removed in `removeSplitter()`, `detach()`,
+  `dispose()` and in both mobile handoff branches (`scan()` and `onResize()`), so the fullscreen
+  layout keeps its own single column. The injected rule is kept as a fallback in document order
+  where no later stylesheet shadows it, and `--dsh-sr-nav-width` stays as a diagnostic hook. The
+  stored record is unaffected: `navWidth` is clamped to 140–480 px and to the dialog width minus
+  320 px before it is written.
+- `scripts/smoke.mjs` gained four regression guards for the inline column: the assignment and its
+  ordering before `positionSplitter()`, the removal in `removeSplitter()`/`detach()`, the removal in
+  the mobile branch of `scan()`, and the absence of an importance override in the injected CSS
+  (108 checks).
+
 ## [0.1.0] - 2026-11-07
 
 ### Added
