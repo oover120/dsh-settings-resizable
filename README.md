@@ -1,5 +1,14 @@
 # dsh-settings-resizable
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.1.0-informational.svg)](CHANGELOG.md)
+[![DSH](https://img.shields.io/badge/DeepSeek%20Harness-0.2.2--rc.1%2B-green.svg)](https://github.com/deepseek-ai)
+[![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](package.json)
+
+**Resizable Settings dialog for DeepSeek Harness.** Drag any edge or corner of the Settings window,
+hit the arrow keys on a focused handle, and the dialog keeps the size you chose the next time you
+open it.
+
 A local DeepSeek Harness (DSH) client plugin that makes the Settings dialog resizable. It adds
 eight pointer handles to the edges and corners of the dialog, lets the user drag them or press the
 arrow keys to change the size, remembers the chosen size in `localStorage`, and clamps every size to
@@ -140,6 +149,12 @@ streaming chat content does not trigger a rescan on every token.
 
 The bundle is a local plugin package. Either route works.
 
+### Get the files
+
+- Download the source ZIP from [Releases](../../releases/latest) and unpack it anywhere.
+- Or clone: `git clone <repo-url>` and check the build locally with `node scripts/smoke.mjs`
+  (79 checks, no dependencies).
+
 ### Route 1: command line
 
 From a terminal:
@@ -155,6 +170,33 @@ profile `package.json` automatically, so the bundle loads on the next start.
 
 Open Settings → Plugins and, if the Plugin Manager offers "install from folder", point it at this
 package directory. Restart DSH afterwards.
+
+### Route 3: manual, for the Electron-managed profile
+
+The desktop application owns the `desktop` profile, so the CLI refuses to touch it:
+
+```
+error: profile "desktop" is managed exclusively by the Electron application
+```
+
+For that profile, install by hand instead — add one dependency and one bundle entry to
+`<DSH_HOME>/profiles/desktop/package.json`, then link the package into the profile's
+`node_modules`:
+
+```json
+{
+  "dependencies": { "dsh-settings-resizable": "link:C:/path/to/dsh-settings-resizable" },
+  "dsh": { "profile": { "bundles": ["…", "dsh-settings-resizable"] } }
+}
+```
+
+```bat
+mklink /J "%USERPROFILE%\.dsh\profiles\desktop\node_modules\dsh-settings-resizable" "C:\path\to\dsh-settings-resizable"
+```
+
+Back up `package.json` first, and check the result with `dsh --profile <copy> --dump-config`: the
+composed tree must contain `id: settings-resizable`. Because the package is linked, later edits to
+`client.js` are picked up on the next start without reinstalling.
 
 The restart is required: the client module is loaded at startup through `window.__ModuleLoader__`,
 so a plugin added to a running app is not picked up until the app starts again.
